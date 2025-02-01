@@ -1,8 +1,9 @@
 import pygame
 import random
 
-# Initialisation de Pygame
+# Initialisation de Pygame et du mixer
 pygame.init()
+pygame.mixer.init()
 
 # Parametres du jeu
 LARGEUR, HAUTEUR = 800, 400
@@ -42,6 +43,15 @@ for i in range(4):
     rock = pygame.transform.scale(rock, (new_width, 40))
     rock_images.append(rock)
 
+# Chargement des sons
+bonus_sound = pygame.mixer.Sound("bonus.wav")
+collision_sound = pygame.mixer.Sound("collision.wav")
+vie_sound = pygame.mixer.Sound("vie.wav")
+
+# Chargement et lancement de la musique de fond
+pygame.mixer.music.load("background.wav")
+pygame.mixer.music.play(-1)  # Lecture en boucle
+
 # Creation de la fenetre
 fenetre = pygame.display.set_mode((LARGEUR, HAUTEUR))
 pygame.display.set_caption("Saute-Grenouille")
@@ -62,7 +72,7 @@ class Grenouille:
         self.vibration_direction = 1
         self.mode_destroyeur = False
         self.destroyeur_timer = 0
-        self.oscillation_counter = 0  # Compteur pour alterner les images en mode destroyer
+        self.oscillation_counter = 0  # Pour alterner les images en mode destroyer
 
     def sauter(self):
         if self.au_sol:
@@ -114,15 +124,18 @@ class Grenouille:
                 self.vibrer()
                 self.vy = SAUT // 2
                 self.vies -= 1
+                collision_sound.play()  # Son de collision
             self.dernier_obstacle_touche = obstacle
 
     def attraper_bonus(self, bonus):
         if bonus.type_bonus == "vie" and self.vies < 5:
             self.vies += 1
+            vie_sound.play()  # Son spécifique pour bonus vie
         elif bonus.type_bonus == "destroy":
             self.mode_destroyeur = True
             self.destroyeur_timer = FPS * 3
             self.oscillation_counter = 0
+            bonus_sound.play()  # Son de bonus destruction
 
 class Obstacle:
     def __init__(self):
