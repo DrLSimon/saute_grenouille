@@ -35,6 +35,7 @@ destroyer_img = pygame.transform.scale(destroyer_img, (20, 20))
 
 # Chargement et mise à l'échelle des images d'obstacles
 rock_images = []
+rock_masks = []
 for i in range(4):
     rock = pygame.image.load(f"rock_{i}.png")
     orig_width, orig_height = rock.get_size()
@@ -42,6 +43,7 @@ for i in range(4):
     new_width = int(orig_width * scale_factor)
     rock = pygame.transform.scale(rock, (new_width, 40))
     rock_images.append(rock)
+    rock_masks.append(pygame.mask.from_surface(rock))  # Création des masques pour la collision pixel-perfect
 
 # Chargement des sons
 bonus_sound = pygame.mixer.Sound("bonus.wav")
@@ -67,6 +69,7 @@ class Grenouille:
         self.au_sol = True
         self.vies = 5
         self.dernier_obstacle_touche = None
+        self.mask = pygame.mask.from_surface(grenouille_img)  # Masque de collision
         self.angle = 0
         self.vibration_frames = 0
         self.vibration_direction = 1
@@ -117,14 +120,22 @@ class Grenouille:
         self.vibration_direction = 1
 
     def collision(self, obstacle):
+        touche = False
+        offset_x = obstacle.x - self.x
+        offset_y = obstacle.y - self.y
+        if self.mask.overlap(obstacle.mask, (offset_x, offset_y)):
+            touche = True
+        if not touche:
+            return
         if self.dernier_obstacle_touche != obstacle:
             if self.mode_destroyeur:
                 obstacle.detruit = True
             else:
-                self.vibrer()
-                self.vy = SAUT // 2
-                self.vies -= 1
-                collision_sound.play()  # Son de collision
+                
+                    self.vibrer()
+                    self.vy = SAUT // 2
+                    self.vies -= 1
+                    collision_sound.play()  # Son de collision
             self.dernier_obstacle_touche = obstacle
 
     def attraper_bonus(self, bonus):
@@ -142,7 +153,9 @@ class Obstacle:
         self.x = LARGEUR
         self.y = HAUTEUR - 40
         self.detruit = False
-        self.image = rock_images[random.randint(0, len(rock_images)-1)]
+        self.image_index = random.randint(0, len(rock_images) - 1)
+        self.image = rock_images[self.image_index]
+        self.mask = rock_masks[self.image_index]
         self.largeur = self.image.get_width()
         self.hauteur = 40
 
