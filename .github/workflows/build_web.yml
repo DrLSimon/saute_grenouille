@@ -1,3 +1,4 @@
+
 name: Build and Deploy GitHub Pages 
 
 on:
@@ -16,7 +17,6 @@ jobs:
         with:
           ref: web   # your branch to retrieve the code from
 
-
       # 2. Set up Python (choose version 3.10 or 3.11 for compatibility with pygbag).
       - name: Set up Python 3.12
         uses: actions/setup-python@v4
@@ -32,7 +32,7 @@ jobs:
       # 4. Build the game with pygbag.
       - name: Build Game with pygbag
         run: |
-          pygbag --build --git --PYBUILD  3.12 .
+          pygbag  --build --git --PYBUILD  3.12 .
         # The build output is usually placed in the build/web folder.
       
       # 5. Deploy to GitHub Pages using peaceiris/actions-gh-pages.
@@ -40,4 +40,5 @@ jobs:
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages   # specify the branch to deploy to
           publish_dir: ./build/web
