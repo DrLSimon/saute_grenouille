@@ -1,6 +1,8 @@
 import pygame
 import random
 
+import asyncio
+
 # Initialisation de Pygame et du mixer
 pygame.init()
 pygame.mixer.init()
@@ -46,12 +48,12 @@ for i in range(4):
     rock_masks.append(pygame.mask.from_surface(rock))  # Création des masques pour la collision pixel-perfect
 
 # Chargement des sons
-bonus_sound = pygame.mixer.Sound("bonus.wav")
-collision_sound = pygame.mixer.Sound("collision.wav")
-vie_sound = pygame.mixer.Sound("vie.wav")
+bonus_sound = pygame.mixer.Sound("bonus.ogg")
+collision_sound = pygame.mixer.Sound("collision.ogg")
+vie_sound = pygame.mixer.Sound("vie.ogg")
 
 # Chargement et lancement de la musique de fond
-pygame.mixer.music.load("background.wav")
+pygame.mixer.music.load("background.ogg")
 pygame.mixer.music.play(-1)  # Lecture en boucle
 
 # Creation de la fenetre
@@ -195,7 +197,7 @@ def afficher_HUD(vies, score):
     fenetre.blit(score_text, (LARGEUR - 120, 10))
 
 # Ecran d'accueil
-def ecran_accueil():
+async def ecran_accueil():
     font = pygame.font.Font(None, 48)
     text = font.render("Appuyez sur ESPACE pour jouer", True, BLANC)
     attente = True
@@ -203,12 +205,15 @@ def ecran_accueil():
         fenetre.fill(BLEU)
         fenetre.blit(text, (LARGEUR // 4, HAUTEUR // 2))
         pygame.display.update()
+
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 exit()
             if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
                 attente = False
+        await asyncio.sleep(0)  # Very important, and keep it 0
 
 # Ecran de fin
 def ecran_fin():
@@ -220,14 +225,14 @@ def ecran_fin():
     pygame.time.delay(3000)
 
 # Boucle principale
-def main():
+async def main():
     clock = pygame.time.Clock()
     grenouille = Grenouille()
     obstacles = []
     bonuses = []
     score = 0
 
-    ecran_accueil()
+    await ecran_accueil()
 
     run = True
     while run:
@@ -276,7 +281,10 @@ def main():
 
         afficher_HUD(grenouille.vies, score)
         pygame.display.update()
-
+        await asyncio.sleep(0)  # Very important, and keep it 0
     pygame.quit()
 
-main()
+
+# Run normally if executed directly
+if __name__ == "__main__":
+    main()
