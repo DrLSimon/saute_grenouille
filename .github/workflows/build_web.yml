@@ -32,7 +32,7 @@ jobs:
       # 4. Build the game with pygbag.
       - name: Build Game with pygbag
         run: |
-          pygbag  --git --PYBUILD  3.12 .
+          pygbag --build --git --PYBUILD  3.12 .
         # The build output is usually placed in the build/web folder.
       
       # 5. Deploy to GitHub Pages using peaceiris/actions-gh-pages.
