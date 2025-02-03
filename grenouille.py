@@ -69,7 +69,11 @@ class TransformState(StateVariable):
     def add_rotation(self, d_angle):
         self.rotation += d_angle
 
-    def set_position(self, x, y):
+    def set_position(self, x=None, y=None):
+        if x is None:
+            x = self.position[0]
+        if y is None:
+            y = self.position[1]
         self.position = pygame.Vector2(x,y)
 
 # --- EFFECT INTERFACE ---
@@ -283,6 +287,7 @@ class Grenouille(IGameObject):
         self.mask = pygame.mask.from_surface(resources.grenouille_img)
         self.display_destroyed = BooleanState(False)
         self.destroyer_effect = None
+        self.is_crouching=False
 
     def in_destroy_mode(self):
         return self.destroyer_effect is not None
@@ -291,6 +296,14 @@ class Grenouille(IGameObject):
         if self.on_ground:
             self.vy = Settings.JUMP_FORCE
             self.on_ground = False
+
+    def crouch(self):
+        if self.on_ground:
+            self.is_crouching = True
+
+    def uncrouch(self):
+        if self.on_ground:
+            self.is_crouching = False
 
     def update(self, effect_manager: EffectManager):
         if self.destroyer_effect is not None and self.destroyer_effect.is_finished():
@@ -306,8 +319,11 @@ class Grenouille(IGameObject):
     def draw(self, surface):
         image = self.image_destroyed if self.display_destroyed.get_value() else self.image
         rotated = pygame.transform.rotate(image, self.transform.rotation)
-        rect = rotated.get_rect(center=(self.transform.position.x + self.width // 2,
-                                        self.transform.position.y + self.height // 2))
+        x,y = self.transform.position.x + self.width // 2, self.transform.position.y + self.height // 2
+        if self.is_crouching: 
+            y += 20
+
+        rect = rotated.get_rect(center=(x,y))
         surface.blit(rotated, rect.topleft)
 
     def trigger_vibration(self):
@@ -386,6 +402,55 @@ class Renderer:
         pygame.display.update()
         pygame.time.delay(3000)
 
+class InputHandler:
+    def __init__(self):
+        pass
+
+    def trigger_quit(self, event):
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+            return True
+        return event.type == pygame.QUIT
+
+    def trigger_start(self, event):
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
+            return True
+
+        if event.type == pygame.MOUSEBUTTONUP:
+            return True
+        
+        return False
+
+    def trigger_jump(self, event):
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
+            return True
+
+        if event.type == pygame.MOUSEBUTTONDOWN: # and event.touch
+            x,y = event.pos
+            return y < Settings.HEIGHT - 40 
+        
+        return False
+
+    def trigger_crouch(self, event):
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_DOWN:
+            return True
+
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            x,y = event.pos
+            return y > Settings.HEIGHT - 40 
+        
+        return False
+
+    def trigger_uncrouch(self, event):
+        if event.type == pygame.KEYUP and event.key == pygame.K_DOWN:
+            return True
+
+        if event.type == pygame.MOUSEBUTTONUP:
+            x,y = event.pos
+            return y > Settings.HEIGHT - 40 
+        
+        return False
+               
+
 # --- GAME CLASS (Coordinates everything) ---
 class Game:
     def __init__(self):
@@ -403,16 +468,17 @@ class Game:
         self.score = 0
         self.effect_manager = EffectManager()
         self.collision_handler = CollisionHandler(self.player, self.effect_manager)
+        self.input_handler = InputHandler()
 
     async def start_screen(self):
         waiting = True
         while waiting:
             self.renderer.draw_start_screen()
             for event in pygame.event.get():
-                if event.type == pygame.QUIT:
+                if self.input_handler.trigger_quit(event):
                     pygame.quit()
                     exit()
-                elif event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
+                elif self.input_handler.trigger_start(event):
                     waiting = False
             await asyncio.sleep(0)
 
@@ -426,10 +492,14 @@ class Game:
             self.clock.tick(Settings.FPS)
             self.screen.fill(Colors.BLUE)
             for event in pygame.event.get():
-                if event.type == pygame.QUIT:
+                if self.input_handler.trigger_quit(event):
                     running = False
-                elif event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
+                elif self.input_handler.trigger_jump(event):
                     self.player.jump()
+                elif self.input_handler.trigger_crouch(event):
+                    self.player.crouch()
+                elif self.input_handler.trigger_uncrouch(event):
+                    self.player.uncrouch()
             self.player.update(self.effect_manager)
 
             if random.randint(1, 150) < 2:
