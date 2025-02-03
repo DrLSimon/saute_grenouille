@@ -1,115 +1,235 @@
 import pygame
 import random
 import asyncio
+from abc import ABC, abstractmethod
 
-# Pré-initialisation du mixer
-pygame.mixer.pre_init(44100, -16, 2, 512)
-pygame.init()
-pygame.mixer.init()
-
-# === CLASSES DE CONFIGURATION ET RESSOURCES ===
-
+# --- SETTINGS & CONFIGURATION ---
 class Settings:
-    LARGEUR = 800
-    HAUTEUR = 400
-    GRAVITE = 1
-    SAUT = -15
-    VITESSE_OBSTACLE = 5
+    WIDTH = 800
+    HEIGHT = 400
+    GRAVITY = 1
+    JUMP_FORCE = -15
+    OBSTACLE_SPEED = 5
     FPS = 30
-    ESPACE_MIN_OBSTACLES = 150  # Distance minimale entre obstacles
+    MIN_OBSTACLE_SPACE = 150  # Minimum space between obstacles
 
+# --- COLORS ---
 class Colors:
-    BLEU = (0, 0, 255)
-    BLANC = (255, 255, 255)
-    ROUGE = (255, 0, 0)
-    VERT = (0, 255, 0)
+    BLUE = (0, 0, 255)
+    WHITE = (255, 255, 255)
+    RED = (255, 0, 0)
+    GREEN = (0, 255, 0)
 
-class Resources:
-    # Images principales
-    grenouille_img = pygame.transform.scale(pygame.image.load("grenouille.png"), (40, 40))
-    grenouille_destroyer_img = pygame.transform.scale(pygame.image.load("grenouille_destroyer.png"), (40, 40))
-    coeur_plein = pygame.transform.scale(pygame.image.load("coeur_plein.png"), (20, 20))
-    coeur_vide = pygame.transform.scale(pygame.image.load("coeur_vide.png"), (20, 20))
-    destroyer_img = pygame.transform.scale(pygame.image.load("destroyer.png"), (20, 20))
+# --- TRANSFORM CLASS ---
+class Transform:
+    def __init__(self, position=(0, 0), rotation=0, scale=(1, 1)):
+        self.position = pygame.Vector2(position)
+        self.rotation = rotation
+        self.scale = pygame.Vector2(scale)
     
-    # Chargement des images de roches et création de leurs masques
-    rock_images = []
-    rock_masks = []
-    for i in range(4):
-        rock = pygame.image.load(f"rock_{i}.png")
-        orig_width, orig_height = rock.get_size()
-        scale_factor = 40 / orig_height
-        new_width = int(orig_width * scale_factor)
-        rock = pygame.transform.scale(rock, (new_width, 40))
-        rock_images.append(rock)
-        rock_masks.append(pygame.mask.from_surface(rock))
-    
-    # Sons
-    bonus_sound = pygame.mixer.Sound("bonus.ogg")
-    collision_sound = pygame.mixer.Sound("collision.ogg")
-    vie_sound = pygame.mixer.Sound("vie.ogg")
-    
-    @classmethod
-    def play_background_music(cls):
-        pygame.mixer.music.load("background.ogg")
-        pygame.mixer.music.play(-1)  # Lecture en boucle
+    def move(self, dx, dy):
+        self.position.x += dx
+        self.position.y += dy
 
-# Lancement de la musique de fond
-Resources.play_background_music()
+    def set_position(self, x, y):
+        self.position.x = x
+        self.position.y = y
 
-# Création de la fenêtre
-fenetre = pygame.display.set_mode((Settings.LARGEUR, Settings.HAUTEUR))
-pygame.display.set_caption("Saute-Grenouille")
+    def add_rotation(self, d_angle):
+        self.rotation += d_angle
 
-# === CLASSES DE LOGIQUE ET DE RENDU DU JEU ===
+# --- EFFECT INTERFACE ---
+class Effect(ABC):
+    def __init__(self, duration: int):
+        self.duration = duration  # measured in frames
 
-# EffetSpecial : gère l’effet (sonore et éventuellement visuel) selon son type.
-class EffetSpecial:
-    def __init__(self, effect_type):
-        self.effect_type = effect_type
-        if effect_type == "bonus":
-            self.sound = Resources.bonus_sound
-        elif effect_type == "collision":
-            self.sound = Resources.collision_sound
-        elif effect_type == "vie":
-            self.sound = Resources.vie_sound
-        else:
-            self.sound = None
+    @abstractmethod
+    def update(self, transform: Transform):
+        """
+        Update the effect. The 'transform' parameter is provided in case
+        the effect needs to modify spatial properties.
+        """
+        pass
 
-    def play(self):
-        if self.sound:
+    def is_finished(self) -> bool:
+        return self.duration <= 0
+
+# --- VIBRATION EFFECT ---
+class VibrationEffect(Effect):
+    def __init__(self, duration: int, magnitude: int = 5, rotation_speed: int = 10):
+        super().__init__(duration)
+        self.magnitude = magnitude
+        self.rotation_speed = rotation_speed
+        self.direction = 1  # alternating direction
+
+    def update(self, transform: Transform):
+        # Oscillate the x-position and rotation.
+        transform.move(self.magnitude * self.direction, 0)
+        transform.add_rotation(self.rotation_speed * self.direction)
+        self.direction *= -1  # alternate direction each frame
+        self.duration -= 1
+
+# --- SOUND EFFECT ---
+class SoundEffect(Effect):
+    def __init__(self, sound: pygame.mixer.Sound):
+        # We use a duration of 1 so that the effect is active only for one frame.
+        super().__init__(duration=1)
+        self.sound = sound
+        self.played = False
+
+    def update(self, transform: Transform):
+        # Although this effect doesn't modify the transform, it shares the same interface.
+        if not self.played:
             self.sound.play()
-        # Vous pouvez ajouter ici des animations spécifiques pour cet effet
+            self.played = True
+        self.duration -= 1
 
-# Niveau : gère obstacles, bonus et utilise les ressources pour les obstacles.
-class Niveau:
+# --- DESTROYER EFFECT ---
+class DestroyerEffect(Effect):
+    def __init__(self, duration: int):
+        super().__init__(duration)
+        self.oscillation_counter = 0
+
+    def update(self, transform: Transform):
+        # We don't change the transform, but we keep track of an oscillation counter.
+        self.oscillation_counter += 1
+        self.duration -= 1
+
+# --- EFFECT MANAGER ---
+class EffectManager:
     def __init__(self):
-        self.obstacles = []
-        self.bonuses = []
-        self.dernier_obstacle_x = 0
+        self.active_effects: list[Effect] = []
 
-    def ajouter_obstacle(self):
-        nouvel_obstacle = Obstacle(self.dernier_obstacle_x,
-                                   Resources.rock_images,
-                                   Resources.rock_masks)
-        self.obstacles.append(nouvel_obstacle)
-        self.dernier_obstacle_x = nouvel_obstacle.x
+    def add_effect(self, effect: Effect):
+        self.active_effects.append(effect)
 
-    def ajouter_bonus(self):
-        self.bonuses.append(Bonus(random.choice(["vie", "destroy"])))
+    def update(self, transform: Transform):
+        # Update all active effects.
+        for effect in self.active_effects[:]:
+            effect.update(transform)
+            if effect.is_finished():
+                self.active_effects.remove(effect)
+
+    def get_destroyer_effect(self):
+        # Returns the first active destroyer effect (if any)
+        for effect in self.active_effects:
+            if isinstance(effect, DestroyerEffect):
+                return effect
+        return None
+
+# --- RESOURCE MANAGER ---
+class Resources:
+    def __init__(self):
+        # Load images and sounds.
+        self.grenouille_img = pygame.transform.scale(pygame.image.load("grenouille.png"), (40, 40))
+        self.grenouille_destroyer_img = pygame.transform.scale(pygame.image.load("grenouille_destroyer.png"), (40, 40))
+        self.coeur_plein = pygame.transform.scale(pygame.image.load("coeur_plein.png"), (20, 20))
+        self.coeur_vide = pygame.transform.scale(pygame.image.load("coeur_vide.png"), (20, 20))
+        self.destroyer_img = pygame.transform.scale(pygame.image.load("destroyer.png"), (20, 20))
+        
+        self.rock_images = []
+        self.rock_masks = []
+        for i in range(4):
+            rock = pygame.image.load(f"rock_{i}.png")
+            orig_width, orig_height = rock.get_size()
+            scale_factor = 40 / orig_height
+            new_width = int(orig_width * scale_factor)
+            rock = pygame.transform.scale(rock, (new_width, 40))
+            self.rock_images.append(rock)
+            self.rock_masks.append(pygame.mask.from_surface(rock))
+        
+        self.bonus_sound = pygame.mixer.Sound("bonus.ogg")
+        self.collision_sound = pygame.mixer.Sound("collision.ogg")
+        self.life_sound = pygame.mixer.Sound("vie.ogg")
+    
+    def play_background_music(self):
+        pygame.mixer.music.load("background.ogg")
+        pygame.mixer.music.play(-1)
+
+# --- ABSTRACT BASE CLASS FOR GAME OBJECTS ---
+class GameObject(ABC):
+    def __init__(self):
+        self.transform = Transform()
+
+    @abstractmethod
+    def update(self):
+        pass
+
+    @abstractmethod
+    def draw(self, surface):
+        pass
+
+# --- OBSTACLE ---
+class Obstacle(GameObject):
+    def __init__(self, last_x: int, resources: Resources):
+        super().__init__()
+        # Set initial position via transform.
+        self.transform.set_position(
+            Settings.WIDTH if last_x == 0 else max(Settings.WIDTH, last_x + Settings.MIN_OBSTACLE_SPACE),
+            Settings.HEIGHT - 40
+        )
+        self.destroyed = False
+        self.image_index = random.randint(0, len(resources.rock_images) - 1)
+        self.image = resources.rock_images[self.image_index]
+        self.mask = resources.rock_masks[self.image_index]
+        self.width = self.image.get_width()
+        self.height = 40
 
     def update(self):
+        self.transform.move(-Settings.OBSTACLE_SPEED, 0)
+
+    def draw(self, surface):
+        if not self.destroyed:
+            surface.blit(self.image, (self.transform.position.x, self.transform.position.y))
+
+# --- BONUS ---
+class Bonus(GameObject):
+    def __init__(self, bonus_type: str, resources: Resources):
+        super().__init__()
+        self.transform.set_position(Settings.WIDTH, random.randint(Settings.HEIGHT - 140, Settings.HEIGHT - 60))
+        self.bonus_type = bonus_type
+        self.width = 20
+        self.height = 20
+        self.resources = resources
+
+    def update(self):
+        self.transform.move(-Settings.OBSTACLE_SPEED, 0)
+
+    def draw(self, surface):
+        if self.bonus_type == "vie":
+            surface.blit(self.resources.coeur_plein, (self.transform.position.x, self.transform.position.y))
+        else:
+            surface.blit(self.resources.destroyer_img, (self.transform.position.x, self.transform.position.y))
+
+# --- LEVEL MANAGER ---
+class Level:
+    def __init__(self, resources: Resources):
+        self.resources = resources
+        self.obstacles: list[Obstacle] = []
+        self.bonuses: list[Bonus] = []
+        self.last_obstacle_x = 0
+
+    def add_obstacle(self):
+        obstacle = Obstacle(self.last_obstacle_x, self.resources)
+        self.obstacles.append(obstacle)
+        self.last_obstacle_x = obstacle.transform.position.x
+
+    def add_bonus(self):
+        bonus_type = random.choice(["vie", "destroy"])
+        self.bonuses.append(Bonus(bonus_type, self.resources))
+
+    def update(self) -> int:
         score_increment = 0
-        if not self.obstacles or (Settings.LARGEUR - self.obstacles[-1].x) > Settings.ESPACE_MIN_OBSTACLES:
-            self.ajouter_obstacle()
+        if not self.obstacles or (Settings.WIDTH - self.obstacles[-1].transform.position.x) > Settings.MIN_OBSTACLE_SPACE:
+            self.add_obstacle()
         for obstacle in self.obstacles[:]:
             obstacle.update()
-            if obstacle.x + obstacle.largeur < 0 or obstacle.detruit:
+            if obstacle.transform.position.x + obstacle.width < 0 or obstacle.destroyed:
                 self.obstacles.remove(obstacle)
                 score_increment += 1
         for bonus in self.bonuses[:]:
             bonus.update()
-            if bonus.x + bonus.largeur < 0:
+            if bonus.transform.position.x + bonus.width < 0:
                 self.bonuses.remove(bonus)
         return score_increment
 
@@ -119,225 +239,195 @@ class Niveau:
         for bonus in self.bonuses:
             bonus.draw(surface)
 
-# Obstacle (logique et rendu)
-class Obstacle:
-    def __init__(self, dernier_x, images, masks):
-        self.x = Settings.LARGEUR if dernier_x == 0 else max(Settings.LARGEUR, dernier_x + Settings.ESPACE_MIN_OBSTACLES)
-        self.y = Settings.HAUTEUR - 40
-        self.detruit = False
-        self.image_index = random.randint(0, len(images) - 1)
-        self.image = images[self.image_index]
-        self.mask = masks[self.image_index]
-        self.largeur = self.image.get_width()
-        self.hauteur = 40
-
-    def update(self):
-        self.x -= Settings.VITESSE_OBSTACLE
-
-    def draw(self, surface):
-        if not self.detruit:
-            surface.blit(self.image, (self.x, self.y))
-
-# Bonus (logique et rendu)
-class Bonus:
-    def __init__(self, type_bonus):
-        self.x = Settings.LARGEUR
-        self.y = random.randint(Settings.HAUTEUR - 140, Settings.HAUTEUR - 60)
-        self.type_bonus = type_bonus
-        self.largeur = 20
-        self.hauteur = 20
-
-    def update(self):
-        self.x -= Settings.VITESSE_OBSTACLE
-
-    def draw(self, surface):
-        if self.type_bonus == "vie":
-            surface.blit(Resources.coeur_plein, (self.x, self.y))
-        else:
-            surface.blit(Resources.destroyer_img, (self.x, self.y))
-
-# Grenouille (logique et rendu)
-class Grenouille:
-    def __init__(self):
-        self.x = 100
-        self.y = Settings.HAUTEUR - 50
-        self.largeur = 40
-        self.hauteur = 40
+# --- PLAYER (Grenouille) ---
+class Grenouille(GameObject):
+    def __init__(self, resources: Resources):
+        super().__init__()
+        self.transform.set_position(100, Settings.HEIGHT - 50)
+        self.width = 40
+        self.height = 40
         self.vy = 0
-        self.au_sol = True
-        self.vies = 5
-        self.dernier_obstacle_touche = None
-        self.mask = pygame.mask.from_surface(Resources.grenouille_img)
-        self.angle = 0
-        self.vibration_frames = 0
-        self.vibration_direction = 1
-        self.mode_destroyeur = False
-        self.destroyeur_timer = 0
-        self.oscillation_counter = 0
+        self.on_ground = True
+        self.lives = 5
+        self.last_collided_obstacle = None
+        self.mask = pygame.mask.from_surface(resources.grenouille_img)
+        self.resources = resources
 
-    def sauter(self):
-        if self.au_sol:
-            self.vy = Settings.SAUT
-            self.au_sol = False
+        # The EffectManager now handles vibration, sound, and destroyer effects.
+        self.effect_manager = EffectManager()
+
+    def jump(self):
+        if self.on_ground:
+            self.vy = Settings.JUMP_FORCE
+            self.on_ground = False
 
     def update(self):
-        self.vy += Settings.GRAVITE
-        self.y += self.vy
-        if self.y >= Settings.HAUTEUR - self.hauteur:
-            self.y = Settings.HAUTEUR - self.hauteur
-            self.au_sol = True
+        # Apply physics for vertical movement.
+        self.vy += Settings.GRAVITY
+        self.transform.move(0, self.vy)
+        if self.transform.position.y >= Settings.HEIGHT - self.height:
+            self.transform.position.y = Settings.HEIGHT - self.height
+            self.on_ground = True
 
-        if self.vibration_frames > 0:
-            self.x += 5 * self.vibration_direction
-            self.angle += 10 * self.vibration_direction
-            self.vibration_direction *= -1
-            self.vibration_frames -= 1
-
-        if self.mode_destroyeur:
-            self.destroyeur_timer -= 1
-            self.oscillation_counter += 1
-            if self.destroyeur_timer <= 0:
-                self.mode_destroyeur = False
-                self.oscillation_counter = 0
+        # Update all active effects.
+        self.effect_manager.update(self.transform)
 
     def draw(self, surface):
-        if self.mode_destroyeur:
-            if (self.oscillation_counter // 5) % 2 == 0:
-                image_a_afficher = Resources.grenouille_destroyer_img
-            else:
-                image_a_afficher = Resources.grenouille_img
+        # Check if a destroyer effect is active.
+        destroyer = self.effect_manager.get_destroyer_effect()
+        if destroyer:
+            # Use the oscillation counter from the destroyer effect to alternate the image.
+            image = (self.resources.grenouille_destroyer_img 
+                     if (destroyer.oscillation_counter // 5) % 2 == 0 
+                     else self.resources.grenouille_img)
         else:
-            image_a_afficher = Resources.grenouille_img
+            image = self.resources.grenouille_img
 
-        image_rotated = pygame.transform.rotate(image_a_afficher, self.angle)
-        rect = image_rotated.get_rect(center=(self.x + self.largeur // 2, self.y + self.hauteur // 2))
-        surface.blit(image_rotated, rect.topleft)
+        rotated = pygame.transform.rotate(image, self.transform.rotation)
+        rect = rotated.get_rect(center=(self.transform.position.x + self.width // 2,
+                                        self.transform.position.y + self.height // 2))
+        surface.blit(rotated, rect.topleft)
 
-    def vibrer(self):
-        self.vibration_frames = 10
-        self.vibration_direction = 1
+    def trigger_vibration(self):
+        # Delegate vibration as an effect.
+        self.effect_manager.add_effect(VibrationEffect(duration=10))
 
-    def collision(self, obstacle):
-        offset_x = obstacle.x - self.x
-        offset_y = obstacle.y - self.y
-        if self.mask.overlap(obstacle.mask, (offset_x, offset_y)):
-            if self.dernier_obstacle_touche != obstacle:
-                if self.mode_destroyeur:
-                    obstacle.detruit = True
+    def play_sound(self, sound: pygame.mixer.Sound):
+        self.effect_manager.add_effect(SoundEffect(sound))
+
+    def activate_destroyer_mode(self):
+        # Activate destroyer mode by adding a destroyer effect.
+        self.effect_manager.add_effect(DestroyerEffect(duration=Settings.FPS * 3))
+    
+    def handle_collision(self, obstacle: Obstacle):
+        offset = (int(obstacle.transform.position.x - self.transform.position.x),
+                  int(obstacle.transform.position.y - self.transform.position.y))
+        if self.mask.overlap(obstacle.mask, offset):
+            if self.last_collided_obstacle != obstacle:
+                # If a destroyer effect is active, destroy the obstacle.
+                if self.effect_manager.get_destroyer_effect():
+                    obstacle.destroyed = True
                 else:
-                    self.vibrer()
-                    self.vy = Settings.SAUT // 2
-                    self.vies -= 1
-                    EffetSpecial("collision").play()
-                self.dernier_obstacle_touche = obstacle
+                    self.trigger_vibration()
+                    self.vy = Settings.JUMP_FORCE // 2
+                    self.lives -= 1
+                    self.play_sound(self.resources.collision_sound)
+                self.last_collided_obstacle = obstacle
 
-    def attraper_bonus(self, bonus):
-        if bonus.type_bonus == "vie" and self.vies < 5:
-            self.vies += 1
-            EffetSpecial("vie").play()
-        elif bonus.type_bonus == "destroy":
-            self.mode_destroyeur = True
-            self.destroyeur_timer = Settings.FPS * 3
-            self.oscillation_counter = 0
-            EffetSpecial("bonus").play()
+    def catch_bonus(self, bonus: Bonus):
+        if bonus.bonus_type == "vie" and self.lives < 5:
+            self.lives += 1
+            self.effect_manager.add_effect(SoundEffect(self.resources.life_sound))
+        elif bonus.bonus_type == "destroy":
+            # Activate destroyer mode via an effect and play the bonus sound.
+            self.activate_destroyer_mode()
+            self.effect_manager.add_effect(SoundEffect(self.resources.bonus_sound))
 
-# Renderer : gère le rendu du HUD, des écrans d'accueil et de fin.
+# --- RENDERER (Handles HUD and static screens) ---
 class Renderer:
-    def __init__(self, surface):
+    def __init__(self, surface, resources: Resources):
         self.surface = surface
         self.font = pygame.font.Font(None, 36)
+        self.resources = resources
 
-    def draw_HUD(self, vies, score):
+    def draw_HUD(self, lives: int, score: int):
         for i in range(5):
-            if i < vies:
-                self.surface.blit(Resources.coeur_plein, (10 + i * 30, 10))
-            else:
-                self.surface.blit(Resources.coeur_vide, (10 + i * 30, 10))
-        score_text = self.font.render(f"Score: {score}", True, Colors.BLANC)
-        self.surface.blit(score_text, (Settings.LARGEUR - 120, 10))
+            img = self.resources.coeur_plein if i < lives else self.resources.coeur_vide
+            self.surface.blit(img, (10 + i * 30, 10))
+        score_text = self.font.render(f"Score: {score}", True, Colors.WHITE)
+        self.surface.blit(score_text, (Settings.WIDTH - 120, 10))
 
-    def draw_accueil(self):
+    def draw_start_screen(self):
         font = pygame.font.Font(None, 48)
-        text = font.render("Appuyez sur ESPACE pour jouer", True, Colors.BLANC)
-        self.surface.fill(Colors.BLEU)
-        self.surface.blit(text, (Settings.LARGEUR // 4, Settings.HAUTEUR // 2))
+        text = font.render("Press SPACE to play", True, Colors.WHITE)
+        self.surface.fill(Colors.BLUE)
+        self.surface.blit(text, (Settings.WIDTH // 4, Settings.HEIGHT // 2))
         pygame.display.update()
 
-    def draw_fin(self):
+    def draw_game_over(self):
         font = pygame.font.Font(None, 48)
-        text = font.render("Game Over", True, Colors.BLANC)
-        self.surface.fill(Colors.BLEU)
-        self.surface.blit(text, (Settings.LARGEUR // 3, Settings.HAUTEUR // 2))
+        text = font.render("Game Over", True, Colors.WHITE)
+        self.surface.fill(Colors.BLUE)
+        self.surface.blit(text, (Settings.WIDTH // 3, Settings.HEIGHT // 2))
         pygame.display.update()
         pygame.time.delay(3000)
 
-# Écran d'accueil (async pour pygbag)
-async def ecran_accueil(renderer):
-    attente = True
-    while attente:
-        renderer.draw_accueil()
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                pygame.quit()
-                exit()
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
-                attente = False
-        await asyncio.sleep(0)
+# --- GAME CLASS (Coordinates everything) ---
+class Game:
+    def __init__(self):
+        pygame.mixer.pre_init(44100, -16, 2, 512)
+        pygame.init()
+        pygame.mixer.init()
+        self.screen = pygame.display.set_mode((Settings.WIDTH, Settings.HEIGHT))
+        pygame.display.set_caption("Saute-Grenouille")
+        self.clock = pygame.time.Clock()
+        self.resources = Resources()
+        self.resources.play_background_music()
+        self.renderer = Renderer(self.screen, self.resources)
+        self.player = Grenouille(self.resources)
+        self.level = Level(self.resources)
+        self.score = 0
 
-# Écran de fin
-def ecran_fin(renderer):
-    renderer.draw_fin()
+    async def start_screen(self):
+        waiting = True
+        while waiting:
+            self.renderer.draw_start_screen()
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    exit()
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
+                    waiting = False
+            await asyncio.sleep(0)
 
-# Boucle principale (async pour pygbag)
-async def main():
-    clock = pygame.time.Clock()
-    player = Grenouille()
-    niveau = Niveau()
-    renderer = Renderer(fenetre)
-    score = 0
+    def game_over_screen(self):
+        self.renderer.draw_game_over()
 
-    await ecran_accueil(renderer)
+    async def run(self):
+        await self.start_screen()
+        running = True
+        while running:
+            self.clock.tick(Settings.FPS)
+            self.screen.fill(Colors.BLUE)
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
+                    self.player.jump()
+            self.player.update()
+            self.player.draw(self.screen)
 
-    run = True
-    while run:
-        clock.tick(Settings.FPS)
-        fenetre.fill(Colors.BLEU)
+            # Randomly add bonus.
+            if random.randint(1, 150) < 2:
+                self.level.add_bonus()
 
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                run = False
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
-                player.sauter()
+            self.score += self.level.update()
+            self.level.draw(self.screen)
 
-        player.update()
-        player.draw(fenetre)
+            # Check collisions for obstacles.
+            for obstacle in self.level.obstacles:
+                self.player.handle_collision(obstacle)
 
-        # Apparition aléatoire de bonus
-        if random.randint(1, 150) < 2:
-            niveau.ajouter_bonus()
+            # Check collisions for bonuses.
+            for bonus in self.level.bonuses[:]:
+                if (self.player.transform.position.x < bonus.transform.position.x + bonus.width and
+                    self.player.transform.position.x + self.player.width > bonus.transform.position.x and
+                    self.player.transform.position.y < bonus.transform.position.y + bonus.height and
+                    self.player.transform.position.y + self.player.height > bonus.transform.position.y):
+                    self.player.catch_bonus(bonus)
+                    self.level.bonuses.remove(bonus)
 
-        score += niveau.update()
-        niveau.draw(fenetre)
+            if self.player.lives <= 0:
+                self.game_over_screen()
+                running = False
 
-        # Gestion des collisions
-        for obstacle in niveau.obstacles:
-            player.collision(obstacle)
-        for bonus in niveau.bonuses[:]:
-            if (player.x < bonus.x + bonus.largeur and
-                player.x + player.largeur > bonus.x and
-                player.y < bonus.y + bonus.hauteur and
-                player.y + player.hauteur > bonus.y):
-                player.attraper_bonus(bonus)
-                niveau.bonuses.remove(bonus)
+            self.renderer.draw_HUD(self.player.lives, self.score)
+            pygame.display.update()
+            await asyncio.sleep(0)
+        pygame.quit()
 
-        if player.vies <= 0:
-            ecran_fin(renderer)
-            run = False
-
-        renderer.draw_HUD(player.vies, score)
-        pygame.display.update()
-        await asyncio.sleep(0)
-    pygame.quit()
-
+# --- MAIN ENTRY POINT ---
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(Game().run())
+
+
