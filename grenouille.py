@@ -414,7 +414,7 @@ class Game:
     def game_over_screen(self):
         self.renderer.draw_game_over()
 
-    async def run(self):
+    def run(self):
         await self.start_screen()
         running = True
         while running:
