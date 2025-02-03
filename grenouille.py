@@ -1,6 +1,7 @@
 import pygame
 import random
 import asyncio
+import collections
 from abc import ABC, abstractmethod
 
 # --- SETTINGS & CONFIGURATION ---
@@ -44,7 +45,7 @@ class Effect(ABC):
         self.duration = duration  # measured in frames
 
     @abstractmethod
-    def update(self, transform: Transform):
+    def update(self):
         """
         Update the effect. The 'transform' parameter is provided in case
         the effect needs to modify spatial properties.
@@ -56,44 +57,49 @@ class Effect(ABC):
 
 # --- VIBRATION EFFECT ---
 class VibrationEffect(Effect):
-    def __init__(self, duration: int, magnitude: int = 5, rotation_speed: int = 10):
+    def __init__(self, duration: int, transform: Transform, magnitude: int = 5, rotation_speed: int = 10):
         super().__init__(duration)
+        self.transform = transform
         self.magnitude = magnitude
         self.rotation_speed = rotation_speed
         self.direction = 1  # alternating direction
 
-    def update(self, transform: Transform):
+    def update(self):
         # Oscillate the x-position and rotation.
-        transform.move(self.magnitude * self.direction, 0)
-        transform.add_rotation(self.rotation_speed * self.direction)
+        self.transform.move(self.magnitude * self.direction, 0)
+        self.transform.add_rotation(self.rotation_speed * self.direction)
         self.direction *= -1  # alternate direction each frame
         self.duration -= 1
 
 # --- SOUND EFFECT ---
 class SoundEffect(Effect):
     def __init__(self, sound: pygame.mixer.Sound):
-        # We use a duration of 1 so that the effect is active only for one frame.
-        super().__init__(duration=1)
+        super().__init__(duration=0)
         self.sound = sound
         self.played = False
 
-    def update(self, transform: Transform):
-        # Although this effect doesn't modify the transform, it shares the same interface.
+    def update(self):
         if not self.played:
             self.sound.play()
             self.played = True
-        self.duration -= 1
+
+    def is_finished(self) -> bool:
+        return self.played
 
 # --- DESTROYER EFFECT ---
 class DestroyerEffect(Effect):
-    def __init__(self, duration: int):
+    def __init__(self, duration: int, target):
         super().__init__(duration)
         self.oscillation_counter = 0
+        self.target = target
 
-    def update(self, transform: Transform):
-        # We don't change the transform, but we keep track of an oscillation counter.
+
+    def update(self):
         self.oscillation_counter += 1
         self.duration -= 1
+        self.target.display_destroyed = (self.oscillation_counter//5)%2
+        if self.is_finished():
+            self.target.in_destroy_mode = False
 
 # --- EFFECT MANAGER ---
 class EffectManager:
@@ -103,19 +109,13 @@ class EffectManager:
     def add_effect(self, effect: Effect):
         self.active_effects.append(effect)
 
-    def update(self, transform: Transform):
+    def update(self):
         # Update all active effects.
-        for effect in self.active_effects[:]:
-            effect.update(transform)
-            if effect.is_finished():
-                self.active_effects.remove(effect)
-
-    def get_destroyer_effect(self):
-        # Returns the first active destroyer effect (if any)
         for effect in self.active_effects:
-            if isinstance(effect, DestroyerEffect):
-                return effect
-        return None
+            effect.update()
+        # Remove completed effects.
+        self.active_effects = [e for e in self.active_effects if not e.is_finished()]
+
 
 # --- RESOURCE MANAGER ---
 class Resources:
@@ -152,7 +152,7 @@ class GameObject(ABC):
         self.transform = Transform()
 
     @abstractmethod
-    def update(self):
+    def update(self, effect_manager):
         pass
 
     @abstractmethod
@@ -175,7 +175,7 @@ class Obstacle(GameObject):
         self.width = self.image.get_width()
         self.height = 40
 
-    def update(self):
+    def update(self, effect_manager):
         self.transform.move(-Settings.OBSTACLE_SPEED, 0)
 
     def draw(self, surface):
@@ -192,7 +192,7 @@ class Bonus(GameObject):
         self.height = 20
         self.resources = resources
 
-    def update(self):
+    def update(self, effect_manager):
         self.transform.move(-Settings.OBSTACLE_SPEED, 0)
 
     def draw(self, surface):
@@ -205,8 +205,8 @@ class Bonus(GameObject):
 class Level:
     def __init__(self, resources: Resources):
         self.resources = resources
-        self.obstacles: list[Obstacle] = []
-        self.bonuses: list[Bonus] = []
+        self.obstacles = collections.deque([],10)
+        self.bonuses = collections.deque([],10)
         self.last_obstacle_x = 0
 
     def add_obstacle(self):
@@ -218,17 +218,18 @@ class Level:
         bonus_type = random.choice(["vie", "destroy"])
         self.bonuses.append(Bonus(bonus_type, self.resources))
 
-    def update(self) -> int:
+    def update(self, effect_manager) -> int:
+        effect_manager.update()
         score_increment = 0
         if not self.obstacles or (Settings.WIDTH - self.obstacles[-1].transform.position.x) > Settings.MIN_OBSTACLE_SPACE:
             self.add_obstacle()
-        for obstacle in self.obstacles[:]:
-            obstacle.update()
+        for obstacle in list(self.obstacles):
+            obstacle.update(effect_manager)
             if obstacle.transform.position.x + obstacle.width < 0 or obstacle.destroyed:
                 self.obstacles.remove(obstacle)
                 score_increment += 1
-        for bonus in self.bonuses[:]:
-            bonus.update()
+        for bonus in list(self.bonuses):
+            bonus.update(effect_manager)
             if bonus.transform.position.x + bonus.width < 0:
                 self.bonuses.remove(bonus)
         return score_increment
@@ -250,18 +251,21 @@ class Grenouille(GameObject):
         self.on_ground = True
         self.lives = 5
         self.last_collided_obstacle = None
-        self.mask = pygame.mask.from_surface(resources.grenouille_img)
         self.resources = resources
+        self.image = self.resources.grenouille_img
+        self.image_destroyed = self.resources.grenouille_destroyer_img
+        self.mask = pygame.mask.from_surface(resources.grenouille_img)
+        self.in_destroy_mode = False
+        self.display_destroyed = False
 
-        # The EffectManager now handles vibration, sound, and destroyer effects.
-        self.effect_manager = EffectManager()
 
     def jump(self):
         if self.on_ground:
             self.vy = Settings.JUMP_FORCE
             self.on_ground = False
 
-    def update(self):
+    def update(self, effect_manager):
+        self.effect_manager = effect_manager
         # Apply physics for vertical movement.
         self.vy += Settings.GRAVITY
         self.transform.move(0, self.vy)
@@ -269,19 +273,10 @@ class Grenouille(GameObject):
             self.transform.position.y = Settings.HEIGHT - self.height
             self.on_ground = True
 
-        # Update all active effects.
-        self.effect_manager.update(self.transform)
-
     def draw(self, surface):
-        # Check if a destroyer effect is active.
-        destroyer = self.effect_manager.get_destroyer_effect()
-        if destroyer:
-            # Use the oscillation counter from the destroyer effect to alternate the image.
-            image = (self.resources.grenouille_destroyer_img 
-                     if (destroyer.oscillation_counter // 5) % 2 == 0 
-                     else self.resources.grenouille_img)
-        else:
-            image = self.resources.grenouille_img
+        image = self.image
+        if self.display_destroyed:
+            image = self.image_destroyed
 
         rotated = pygame.transform.rotate(image, self.transform.rotation)
         rect = rotated.get_rect(center=(self.transform.position.x + self.width // 2,
@@ -290,14 +285,15 @@ class Grenouille(GameObject):
 
     def trigger_vibration(self):
         # Delegate vibration as an effect.
-        self.effect_manager.add_effect(VibrationEffect(duration=10))
+        self.effect_manager.add_effect(VibrationEffect(transform=self.transform, duration=10))
 
     def play_sound(self, sound: pygame.mixer.Sound):
         self.effect_manager.add_effect(SoundEffect(sound))
 
     def activate_destroyer_mode(self):
         # Activate destroyer mode by adding a destroyer effect.
-        self.effect_manager.add_effect(DestroyerEffect(duration=Settings.FPS * 3))
+        self.effect_manager.add_effect(DestroyerEffect(target=self, duration=Settings.FPS * 3))
+        self.in_destroy_mode = True
     
     def handle_collision(self, obstacle: Obstacle):
         offset = (int(obstacle.transform.position.x - self.transform.position.x),
@@ -305,7 +301,7 @@ class Grenouille(GameObject):
         if self.mask.overlap(obstacle.mask, offset):
             if self.last_collided_obstacle != obstacle:
                 # If a destroyer effect is active, destroy the obstacle.
-                if self.effect_manager.get_destroyer_effect():
+                if self.in_destroy_mode:
                     obstacle.destroyed = True
                 else:
                     self.trigger_vibration()
@@ -315,13 +311,21 @@ class Grenouille(GameObject):
                 self.last_collided_obstacle = obstacle
 
     def catch_bonus(self, bonus: Bonus):
+        if not (self.transform.position.x < bonus.transform.position.x + bonus.width and
+            self.transform.position.x + self.width > bonus.transform.position.x and
+            self.transform.position.y < bonus.transform.position.y + bonus.height and
+            self.transform.position.y + self.height > bonus.transform.position.y):
+            return False
         if bonus.bonus_type == "vie" and self.lives < 5:
             self.lives += 1
             self.effect_manager.add_effect(SoundEffect(self.resources.life_sound))
+            return True
         elif bonus.bonus_type == "destroy":
             # Activate destroyer mode via an effect and play the bonus sound.
             self.activate_destroyer_mode()
             self.effect_manager.add_effect(SoundEffect(self.resources.bonus_sound))
+            return True
+        return False
 
 # --- RENDERER (Handles HUD and static screens) ---
 class Renderer:
@@ -367,6 +371,7 @@ class Game:
         self.player = Grenouille(self.resources)
         self.level = Level(self.resources)
         self.score = 0
+        self.effect_manager = EffectManager()
 
     async def start_screen(self):
         waiting = True
@@ -394,14 +399,13 @@ class Game:
                     running = False
                 elif event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
                     self.player.jump()
-            self.player.update()
-            self.player.draw(self.screen)
+            self.player.update(self.effect_manager)
 
             # Randomly add bonus.
             if random.randint(1, 150) < 2:
                 self.level.add_bonus()
 
-            self.score += self.level.update()
+            self.score += self.level.update(self.effect_manager)
             self.level.draw(self.screen)
 
             # Check collisions for obstacles.
@@ -409,13 +413,12 @@ class Game:
                 self.player.handle_collision(obstacle)
 
             # Check collisions for bonuses.
-            for bonus in self.level.bonuses[:]:
-                if (self.player.transform.position.x < bonus.transform.position.x + bonus.width and
-                    self.player.transform.position.x + self.player.width > bonus.transform.position.x and
-                    self.player.transform.position.y < bonus.transform.position.y + bonus.height and
-                    self.player.transform.position.y + self.player.height > bonus.transform.position.y):
-                    self.player.catch_bonus(bonus)
+            for bonus in list(self.level.bonuses):
+                caught_it = self.player.catch_bonus(bonus)
+                if caught_it:
                     self.level.bonuses.remove(bonus)
+
+            self.player.draw(self.screen)
 
             if self.player.lives <= 0:
                 self.game_over_screen()
