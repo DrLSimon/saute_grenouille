@@ -21,55 +21,92 @@ class Colors:
     RED = (255, 0, 0)
     GREEN = (0, 255, 0)
 
-# --- TRANSFORM CLASS ---
-class Transform:
+# Base class for state variables
+class StateVariable(ABC):
+    @abstractmethod
+    def get_value(self):
+        pass
+
+    @abstractmethod
+    def set_value(self, value):
+        pass
+
+class BooleanState(StateVariable):
+    def __init__(self, initial_value: bool):
+        self.value = initial_value
+
+    def get_value(self):
+        return self.value
+
+    def set_value(self, value: bool):
+        self.value = value
+
+class TransformState(StateVariable):
     def __init__(self, position=(0, 0), rotation=0, scale=(1, 1)):
         self.position = pygame.Vector2(position)
         self.rotation = rotation
         self.scale = pygame.Vector2(scale)
-    
+
+    def get_value(self):
+        return {
+            'position': self.position,
+            'rotation': self.rotation,
+            'scale': self.scale
+        }
+
+    def set_value(self, value):
+        if 'position' in value:
+            self.set_position(*value['position'])
+        if 'rotation' in value:
+            self.rotation = value['rotation']
+        if 'scale' in value:
+            self.scale = pygame.Vector2(value['scale'])
+
     def move(self, dx, dy):
         self.position.x += dx
         self.position.y += dy
 
-    def set_position(self, x, y):
-        self.position.x = x
-        self.position.y = y
-
     def add_rotation(self, d_angle):
         self.rotation += d_angle
 
+    def set_position(self, x, y):
+        self.position = pygame.Vector2(x,y)
+
 # --- EFFECT INTERFACE ---
 class IEffect(ABC):
-    def __init__(self, duration: int):
-        self.duration = duration  # measured in frames
+    def __init__(self, target: StateVariable):
+        self.target = target
 
     @abstractmethod
     def update(self):
         pass
 
+    @abstractmethod
     def is_finished(self) -> bool:
-        return self.duration <= 0
+        pass
 
 # --- VIBRATION EFFECT ---
 class VibrationEffect(IEffect):
-    def __init__(self, duration: int, transform: Transform, magnitude: int = 5, rotation_speed: int = 10):
-        super().__init__(duration)
-        self.transform = transform
+    def __init__(self, target: TransformState, duration: int, magnitude: int = 5, rotation_speed: int = 10):
+        super().__init__(target)
+        self.duration = duration
         self.magnitude = magnitude
         self.rotation_speed = rotation_speed
         self.direction = 1  # alternating direction
 
     def update(self):
-        self.transform.move(self.magnitude * self.direction, 0)
-        self.transform.add_rotation(self.rotation_speed * self.direction)
+        self.target.move(self.magnitude * self.direction, 0)
+        self.target.add_rotation(self.rotation_speed * self.direction)
         self.direction *= -1  # alternate direction each frame
         self.duration -= 1
+
+    def is_finished(self) -> bool:
+        return self.duration <= 0
 
 # --- SOUND EFFECT ---
 class SoundEffect(IEffect):
     def __init__(self, sound: pygame.mixer.Sound):
-        super().__init__(duration=0)
+        super().__init__(None)
         self.sound = sound
         self.played = False
 
@@ -81,19 +118,20 @@ class SoundEffect(IEffect):
     def is_finished(self) -> bool:
         return self.played
 
-# --- DESTROYER EFFECT ---
-class DestroyerEffect(IEffect):
-    def __init__(self, duration: int, target):
-        super().__init__(duration)
+# --- BOOLEAN TOGGLE EFFECT ---
+class BooleanToggleEffect(IEffect):
+    def __init__(self, target: BooleanState, duration: int):
+        super().__init__(target)
+        self.duration = duration
         self.oscillation_counter = 0
-        self.target = target
 
     def update(self):
         self.oscillation_counter += 1
+        self.target.set_value((self.oscillation_counter // 5) % 2 == 1)
         self.duration -= 1
-        self.target.display_destroyed = (self.oscillation_counter // 5) % 2
-        if self.is_finished():
-            self.target.in_destroy_mode = False
+
+    def is_finished(self) -> bool:
+        return self.duration <= 0
 
 # --- EFFECT MANAGER ---
 class EffectManager:
@@ -139,7 +177,7 @@ class Resources:
 # --- ABSTRACT BASE CLASS FOR GAME OBJECTS ---
 class IGameObject(ABC):
     def __init__(self):
-        self.transform = Transform()
+        self.transform = TransformState()
 
     @abstractmethod
     def update(self, effect_manager: EffectManager):
@@ -243,8 +281,8 @@ class Grenouille(IGameObject):
         self.image = self.resources.grenouille_img
         self.image_destroyed = self.resources.grenouille_destroyer_img
         self.mask = pygame.mask.from_surface(resources.grenouille_img)
-        self.in_destroy_mode = False
-        self.display_destroyed = False
+        self.in_destroy_mode = BooleanState(False)
+        self.display_destroyed = BooleanState(False)
 
     def jump(self):
         if self.on_ground:
@@ -258,23 +296,24 @@ class Grenouille(IGameObject):
         if self.transform.position.y >= Settings.HEIGHT - self.height:
             self.transform.position.y = Settings.HEIGHT - self.height
             self.on_ground = True
+            self.vy = 0
 
     def draw(self, surface):
-        image = self.image_destroyed if self.display_destroyed else self.image
+        image = self.image_destroyed if self.display_destroyed.get_value() else self.image
         rotated = pygame.transform.rotate(image, self.transform.rotation)
         rect = rotated.get_rect(center=(self.transform.position.x + self.width // 2,
                                         self.transform.position.y + self.height // 2))
         surface.blit(rotated, rect.topleft)
 
     def trigger_vibration(self):
-        self.effect_manager.add_effect(VibrationEffect(transform=self.transform, duration=10))
+        self.effect_manager.add_effect(VibrationEffect(target=self.transform, duration=10))
 
     def play_sound(self, sound: pygame.mixer.Sound):
         self.effect_manager.add_effect(SoundEffect(sound))
 
     def activate_destroyer_mode(self):
-        self.effect_manager.add_effect(DestroyerEffect(target=self, duration=Settings.FPS * 3))
-        self.in_destroy_mode = True
+        self.effect_manager.add_effect(BooleanToggleEffect(target=self.display_destroyed, duration=Settings.FPS * 3))
+        self.in_destroy_mode.set_value(True)
 
 # --- COLLISION HANDLER ---
 class CollisionHandler:
@@ -288,7 +327,7 @@ class CollisionHandler:
                   int(obstacle.transform.position.y - self.player.transform.position.y))
         if self.player.mask.overlap(obstacle.mask, offset):
             if self.last_collided_obstacle != obstacle:
-                if self.player.in_destroy_mode:
+                if self.player.in_destroy_mode.get_value():
                     obstacle.destroyed = True
                 else:
                     self.player.trigger_vibration()
