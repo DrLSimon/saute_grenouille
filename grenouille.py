@@ -414,7 +414,7 @@ class Game:
     def game_over_screen(self):
         self.renderer.draw_game_over()
 
-    def run(self):
+    async def run(self):
         await self.start_screen()
         running = True
         while running:
@@ -451,8 +451,8 @@ class Game:
             await asyncio.sleep(0)
         pygame.quit()
 
-async def main():
-    Game().run()
+def main():
+    asyncio.run(Game().run())
 
 # --- MAIN ENTRY POINT ---
 if __name__ == "__main__":

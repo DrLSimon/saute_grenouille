@@ -8,7 +8,7 @@ import asyncio
 import grenouille  # Import the main game
 
 def main():
-    asyncio.run(grenouille.main())  # Run the game
+    grenouille.main()  # Run the game
     
 
 main()
