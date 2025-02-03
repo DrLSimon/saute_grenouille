@@ -40,23 +40,19 @@ class Transform:
         self.rotation += d_angle
 
 # --- EFFECT INTERFACE ---
-class Effect(ABC):
+class IEffect(ABC):
     def __init__(self, duration: int):
         self.duration = duration  # measured in frames
 
     @abstractmethod
     def update(self):
-        """
-        Update the effect. The 'transform' parameter is provided in case
-        the effect needs to modify spatial properties.
-        """
         pass
 
     def is_finished(self) -> bool:
         return self.duration <= 0
 
 # --- VIBRATION EFFECT ---
-class VibrationEffect(Effect):
+class VibrationEffect(IEffect):
     def __init__(self, duration: int, transform: Transform, magnitude: int = 5, rotation_speed: int = 10):
         super().__init__(duration)
         self.transform = transform
@@ -65,14 +61,13 @@ class VibrationEffect(Effect):
         self.direction = 1  # alternating direction
 
     def update(self):
-        # Oscillate the x-position and rotation.
         self.transform.move(self.magnitude * self.direction, 0)
         self.transform.add_rotation(self.rotation_speed * self.direction)
         self.direction *= -1  # alternate direction each frame
         self.duration -= 1
 
 # --- SOUND EFFECT ---
-class SoundEffect(Effect):
+class SoundEffect(IEffect):
     def __init__(self, sound: pygame.mixer.Sound):
         super().__init__(duration=0)
         self.sound = sound
@@ -87,40 +82,35 @@ class SoundEffect(Effect):
         return self.played
 
 # --- DESTROYER EFFECT ---
-class DestroyerEffect(Effect):
+class DestroyerEffect(IEffect):
     def __init__(self, duration: int, target):
         super().__init__(duration)
         self.oscillation_counter = 0
         self.target = target
 
-
     def update(self):
         self.oscillation_counter += 1
         self.duration -= 1
-        self.target.display_destroyed = (self.oscillation_counter//5)%2
+        self.target.display_destroyed = (self.oscillation_counter // 5) % 2
         if self.is_finished():
             self.target.in_destroy_mode = False
 
 # --- EFFECT MANAGER ---
 class EffectManager:
     def __init__(self):
-        self.active_effects: list[Effect] = []
+        self.active_effects: list[IEffect] = []
 
-    def add_effect(self, effect: Effect):
+    def add_effect(self, effect: IEffect):
         self.active_effects.append(effect)
 
     def update(self):
-        # Update all active effects.
         for effect in self.active_effects:
             effect.update()
-        # Remove completed effects.
         self.active_effects = [e for e in self.active_effects if not e.is_finished()]
-
 
 # --- RESOURCE MANAGER ---
 class Resources:
     def __init__(self):
-        # Load images and sounds.
         self.grenouille_img = pygame.transform.scale(pygame.image.load("grenouille.png"), (40, 40))
         self.grenouille_destroyer_img = pygame.transform.scale(pygame.image.load("grenouille_destroyer.png"), (40, 40))
         self.coeur_plein = pygame.transform.scale(pygame.image.load("coeur_plein.png"), (20, 20))
@@ -147,12 +137,12 @@ class Resources:
         pygame.mixer.music.play(-1)
 
 # --- ABSTRACT BASE CLASS FOR GAME OBJECTS ---
-class GameObject(ABC):
+class IGameObject(ABC):
     def __init__(self):
         self.transform = Transform()
 
     @abstractmethod
-    def update(self, effect_manager):
+    def update(self, effect_manager: EffectManager):
         pass
 
     @abstractmethod
@@ -160,10 +150,9 @@ class GameObject(ABC):
         pass
 
 # --- OBSTACLE ---
-class Obstacle(GameObject):
+class Obstacle(IGameObject):
     def __init__(self, last_x: int, resources: Resources):
         super().__init__()
-        # Set initial position via transform.
         self.transform.set_position(
             Settings.WIDTH if last_x == 0 else max(Settings.WIDTH, last_x + Settings.MIN_OBSTACLE_SPACE),
             Settings.HEIGHT - 40
@@ -175,7 +164,7 @@ class Obstacle(GameObject):
         self.width = self.image.get_width()
         self.height = 40
 
-    def update(self, effect_manager):
+    def update(self, effect_manager: EffectManager):
         self.transform.move(-Settings.OBSTACLE_SPEED, 0)
 
     def draw(self, surface):
@@ -183,7 +172,7 @@ class Obstacle(GameObject):
             surface.blit(self.image, (self.transform.position.x, self.transform.position.y))
 
 # --- BONUS ---
-class Bonus(GameObject):
+class Bonus(IGameObject):
     def __init__(self, bonus_type: str, resources: Resources):
         super().__init__()
         self.transform.set_position(Settings.WIDTH, random.randint(Settings.HEIGHT - 140, Settings.HEIGHT - 60))
@@ -192,7 +181,7 @@ class Bonus(GameObject):
         self.height = 20
         self.resources = resources
 
-    def update(self, effect_manager):
+    def update(self, effect_manager: EffectManager):
         self.transform.move(-Settings.OBSTACLE_SPEED, 0)
 
     def draw(self, surface):
@@ -205,8 +194,8 @@ class Bonus(GameObject):
 class Level:
     def __init__(self, resources: Resources):
         self.resources = resources
-        self.obstacles = collections.deque([],10)
-        self.bonuses = collections.deque([],10)
+        self.obstacles = collections.deque([], 10)
+        self.bonuses = collections.deque([], 10)
         self.last_obstacle_x = 0
 
     def add_obstacle(self):
@@ -218,7 +207,7 @@ class Level:
         bonus_type = random.choice(["vie", "destroy"])
         self.bonuses.append(Bonus(bonus_type, self.resources))
 
-    def update(self, effect_manager) -> int:
+    def update(self, effect_manager: EffectManager) -> int:
         effect_manager.update()
         score_increment = 0
         if not self.obstacles or (Settings.WIDTH - self.obstacles[-1].transform.position.x) > Settings.MIN_OBSTACLE_SPACE:
@@ -241,7 +230,7 @@ class Level:
             bonus.draw(surface)
 
 # --- PLAYER (Grenouille) ---
-class Grenouille(GameObject):
+class Grenouille(IGameObject):
     def __init__(self, resources: Resources):
         super().__init__()
         self.transform.set_position(100, Settings.HEIGHT - 50)
@@ -250,7 +239,6 @@ class Grenouille(GameObject):
         self.vy = 0
         self.on_ground = True
         self.lives = 5
-        self.last_collided_obstacle = None
         self.resources = resources
         self.image = self.resources.grenouille_img
         self.image_destroyed = self.resources.grenouille_destroyer_img
@@ -258,15 +246,13 @@ class Grenouille(GameObject):
         self.in_destroy_mode = False
         self.display_destroyed = False
 
-
     def jump(self):
         if self.on_ground:
             self.vy = Settings.JUMP_FORCE
             self.on_ground = False
 
-    def update(self, effect_manager):
+    def update(self, effect_manager: EffectManager):
         self.effect_manager = effect_manager
-        # Apply physics for vertical movement.
         self.vy += Settings.GRAVITY
         self.transform.move(0, self.vy)
         if self.transform.position.y >= Settings.HEIGHT - self.height:
@@ -274,56 +260,56 @@ class Grenouille(GameObject):
             self.on_ground = True
 
     def draw(self, surface):
-        image = self.image
-        if self.display_destroyed:
-            image = self.image_destroyed
-
+        image = self.image_destroyed if self.display_destroyed else self.image
         rotated = pygame.transform.rotate(image, self.transform.rotation)
         rect = rotated.get_rect(center=(self.transform.position.x + self.width // 2,
                                         self.transform.position.y + self.height // 2))
         surface.blit(rotated, rect.topleft)
 
     def trigger_vibration(self):
-        # Delegate vibration as an effect.
         self.effect_manager.add_effect(VibrationEffect(transform=self.transform, duration=10))
 
     def play_sound(self, sound: pygame.mixer.Sound):
         self.effect_manager.add_effect(SoundEffect(sound))
 
     def activate_destroyer_mode(self):
-        # Activate destroyer mode by adding a destroyer effect.
         self.effect_manager.add_effect(DestroyerEffect(target=self, duration=Settings.FPS * 3))
         self.in_destroy_mode = True
-    
+
+# --- COLLISION HANDLER ---
+class CollisionHandler:
+    def __init__(self, player: Grenouille, effect_manager: EffectManager):
+        self.player = player
+        self.effect_manager = effect_manager
+        self.last_collided_obstacle = None
+
     def handle_collision(self, obstacle: Obstacle):
-        offset = (int(obstacle.transform.position.x - self.transform.position.x),
-                  int(obstacle.transform.position.y - self.transform.position.y))
-        if self.mask.overlap(obstacle.mask, offset):
+        offset = (int(obstacle.transform.position.x - self.player.transform.position.x),
+                  int(obstacle.transform.position.y - self.player.transform.position.y))
+        if self.player.mask.overlap(obstacle.mask, offset):
             if self.last_collided_obstacle != obstacle:
-                # If a destroyer effect is active, destroy the obstacle.
-                if self.in_destroy_mode:
+                if self.player.in_destroy_mode:
                     obstacle.destroyed = True
                 else:
-                    self.trigger_vibration()
-                    self.vy = Settings.JUMP_FORCE // 2
-                    self.lives -= 1
-                    self.play_sound(self.resources.collision_sound)
+                    self.player.trigger_vibration()
+                    self.player.vy = Settings.JUMP_FORCE // 2
+                    self.player.lives -= 1
+                    self.player.play_sound(self.player.resources.collision_sound)
                 self.last_collided_obstacle = obstacle
 
     def catch_bonus(self, bonus: Bonus):
-        if not (self.transform.position.x < bonus.transform.position.x + bonus.width and
-            self.transform.position.x + self.width > bonus.transform.position.x and
-            self.transform.position.y < bonus.transform.position.y + bonus.height and
-            self.transform.position.y + self.height > bonus.transform.position.y):
+        if not (self.player.transform.position.x < bonus.transform.position.x + bonus.width and
+                self.player.transform.position.x + self.player.width > bonus.transform.position.x and
+                self.player.transform.position.y < bonus.transform.position.y + bonus.height and
+                self.player.transform.position.y + self.player.height > bonus.transform.position.y):
             return False
-        if bonus.bonus_type == "vie" and self.lives < 5:
-            self.lives += 1
-            self.effect_manager.add_effect(SoundEffect(self.resources.life_sound))
+        if bonus.bonus_type == "vie" and self.player.lives < 5:
+            self.player.lives += 1
+            self.effect_manager.add_effect(SoundEffect(self.player.resources.life_sound))
             return True
         elif bonus.bonus_type == "destroy":
-            # Activate destroyer mode via an effect and play the bonus sound.
-            self.activate_destroyer_mode()
-            self.effect_manager.add_effect(SoundEffect(self.resources.bonus_sound))
+            self.player.activate_destroyer_mode()
+            self.effect_manager.add_effect(SoundEffect(self.player.resources.bonus_sound))
             return True
         return False
 
@@ -372,6 +358,7 @@ class Game:
         self.level = Level(self.resources)
         self.score = 0
         self.effect_manager = EffectManager()
+        self.collision_handler = CollisionHandler(self.player, self.effect_manager)
 
     async def start_screen(self):
         waiting = True
@@ -401,21 +388,17 @@ class Game:
                     self.player.jump()
             self.player.update(self.effect_manager)
 
-            # Randomly add bonus.
             if random.randint(1, 150) < 2:
                 self.level.add_bonus()
 
             self.score += self.level.update(self.effect_manager)
             self.level.draw(self.screen)
 
-            # Check collisions for obstacles.
             for obstacle in self.level.obstacles:
-                self.player.handle_collision(obstacle)
+                self.collision_handler.handle_collision(obstacle)
 
-            # Check collisions for bonuses.
             for bonus in list(self.level.bonuses):
-                caught_it = self.player.catch_bonus(bonus)
-                if caught_it:
+                if self.collision_handler.catch_bonus(bonus):
                     self.level.bonuses.remove(bonus)
 
             self.player.draw(self.screen)
@@ -432,5 +415,3 @@ class Game:
 # --- MAIN ENTRY POINT ---
 if __name__ == "__main__":
     asyncio.run(Game().run())
-
-
