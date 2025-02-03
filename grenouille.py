@@ -281,8 +281,11 @@ class Grenouille(IGameObject):
         self.image = self.resources.grenouille_img
         self.image_destroyed = self.resources.grenouille_destroyer_img
         self.mask = pygame.mask.from_surface(resources.grenouille_img)
-        self.in_destroy_mode = BooleanState(False)
         self.display_destroyed = BooleanState(False)
+        self.destroyer_effect = None
+
+    def in_destroy_mode(self):
+        return self.destroyer_effect is not None
 
     def jump(self):
         if self.on_ground:
@@ -290,6 +293,8 @@ class Grenouille(IGameObject):
             self.on_ground = False
 
     def update(self, effect_manager: EffectManager):
+        if self.destroyer_effect is not None and self.destroyer_effect.is_finished():
+            self.destroyer_effect = None
         self.effect_manager = effect_manager
         self.vy += Settings.GRAVITY
         self.transform.move(0, self.vy)
@@ -312,8 +317,8 @@ class Grenouille(IGameObject):
         self.effect_manager.add_effect(SoundEffect(sound))
 
     def activate_destroyer_mode(self):
-        self.effect_manager.add_effect(BooleanToggleEffect(target=self.display_destroyed, duration=Settings.FPS * 3))
-        self.in_destroy_mode.set_value(True)
+        self.destroyer_effect = BooleanToggleEffect(target=self.display_destroyed, duration=Settings.FPS * 3)
+        self.effect_manager.add_effect(self.destroyer_effect)
 
 # --- COLLISION HANDLER ---
 class CollisionHandler:
@@ -327,7 +332,7 @@ class CollisionHandler:
                   int(obstacle.transform.position.y - self.player.transform.position.y))
         if self.player.mask.overlap(obstacle.mask, offset):
             if self.last_collided_obstacle != obstacle:
-                if self.player.in_destroy_mode.get_value():
+                if self.player.in_destroy_mode():
                     obstacle.destroyed = True
                 else:
                     self.player.trigger_vibration()
