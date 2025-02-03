@@ -451,7 +451,7 @@ class Game:
             await asyncio.sleep(0)
         pygame.quit()
 
-def main():
+async def main():
     Game().run()
 
 # --- MAIN ENTRY POINT ---
