@@ -404,7 +404,7 @@ class Renderer:
 
 class InputHandler:
     def __init__(self):
-        pass
+        self.is_crouching = False
 
     def trigger_quit(self, event):
         if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
@@ -421,6 +421,8 @@ class InputHandler:
         return False
 
     def trigger_jump(self, event):
+        if self.is_crouching:
+            return False
         if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
             return True
 
@@ -432,21 +434,26 @@ class InputHandler:
 
     def trigger_crouch(self, event):
         if event.type == pygame.KEYDOWN and event.key == pygame.K_DOWN:
+            self.is_crouching = True
             return True
 
         if event.type == pygame.MOUSEBUTTONDOWN:
             x,y = event.pos
-            return y > Settings.HEIGHT - 40 
+            self.is_crouching = y > Settings.HEIGHT - 40 
+            return self.is_crouching
         
         return False
 
     def trigger_uncrouch(self, event):
+        if not self.is_crouching:
+            return False
         if event.type == pygame.KEYUP and event.key == pygame.K_DOWN:
+            self.is_crouching = False
             return True
 
         if event.type == pygame.MOUSEBUTTONUP:
-            x,y = event.pos
-            return y > Settings.HEIGHT - 40 
+            self.is_crouching = False
+            return True
         
         return False
                
