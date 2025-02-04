@@ -12,7 +12,7 @@ class Settings:
     JUMP_FORCE = -15
     OBSTACLE_SPEED = 5
     FPS = 30
-    MIN_OBSTACLE_SPACE = 150  # Minimum space between obstacles
+    MIN_OBSTACLE_SPACE = 90  # Minimum space between obstacles
 
 # --- COLORS ---
 class Colors:
