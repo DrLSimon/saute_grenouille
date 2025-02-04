@@ -74,7 +74,7 @@ class TransformState(StateVariable):
             x = self.position[0]
         if y is None:
             y = self.position[1]
-        self.position = pygame.Vector2(x,y)
+        self.position = pygame.Vector2(x, y)
 
 # --- EFFECT INTERFACE ---
 class IEffect(ABC):
@@ -170,6 +170,10 @@ class Resources:
             self.rock_images.append(rock)
             self.rock_masks.append(pygame.mask.from_surface(rock))
         
+        self.plante0_img = pygame.transform.scale(pygame.image.load("plante0.png"), (40, 40))
+        self.plante1_img = pygame.transform.scale(pygame.image.load("plante1.png"), (40, 40))
+        self.plante2_img = pygame.transform.scale(pygame.image.load("plante2.png"), (40, 40))
+        
         self.bonus_sound = pygame.mixer.Sound("bonus.ogg")
         self.collision_sound = pygame.mixer.Sound("collision.ogg")
         self.life_sound = pygame.mixer.Sound("vie.ogg")
@@ -191,8 +195,22 @@ class IGameObject(ABC):
     def draw(self, surface):
         pass
 
-# --- OBSTACLE ---
-class Obstacle(IGameObject):
+# --- OBSTACLE INTERFACE ---
+class IObstacle(IGameObject, ABC):
+    @abstractmethod
+    def update(self, effect_manager: EffectManager):
+        pass
+
+    @abstractmethod
+    def draw(self, surface):
+        pass
+
+    @abstractmethod
+    def check_collision(self, player: 'Grenouille') -> bool:
+        pass
+
+# --- ROCK ---
+class Rock(IObstacle):
     def __init__(self, last_x: int, resources: Resources):
         super().__init__()
         self.transform.set_position(
@@ -212,6 +230,49 @@ class Obstacle(IGameObject):
     def draw(self, surface):
         if not self.destroyed:
             surface.blit(self.image, (self.transform.position.x, self.transform.position.y))
+
+    def check_collision(self, player: 'Grenouille') -> bool:
+        offset = (int(self.transform.position.x - player.transform.position.x),
+                  int(self.transform.position.y - player.transform.position.y))
+        return player.mask.overlap(self.mask, offset) is not None
+
+# --- DEADLY PLANT ---
+class DeadlyPlant(IObstacle):
+    def __init__(self, last_x: int, resources: Resources):
+        super().__init__()
+        self.transform.set_position(
+            Settings.WIDTH if last_x == 0 else max(Settings.WIDTH, last_x + Settings.MIN_OBSTACLE_SPACE),
+            Settings.HEIGHT - 70  # y-offset of 30 from the ground level of the player
+        )
+        self.destroyed = False
+        self.image_frames = [
+            resources.plante0_img,
+            resources.plante1_img,
+            resources.plante2_img,
+            resources.plante1_img
+        ]
+        self.current_frame = 0
+        self.frame_count = 0
+        self.frame_delay = 10  # adjust as needed for animation speed
+        self.width = self.image_frames[0].get_width()
+        self.height = self.image_frames[0].get_height()
+
+    def update(self, effect_manager: EffectManager):
+        self.transform.move(-Settings.OBSTACLE_SPEED, 0)
+        self.frame_count += 1
+        if self.frame_count >= self.frame_delay:
+            self.current_frame = (self.current_frame + 1) % len(self.image_frames)
+            self.frame_count = 0
+
+    def draw(self, surface):
+        if not self.destroyed:
+            surface.blit(self.image_frames[self.current_frame], (self.transform.position.x, self.transform.position.y))
+
+    def check_collision(self, player: 'Grenouille') -> bool:
+        if player.is_crouching:
+            return False
+        return (self.transform.position.x < player.transform.position.x + player.width and
+                self.transform.position.x + self.width > player.transform.position.x)
 
 # --- BONUS ---
 class Bonus(IGameObject):
@@ -241,7 +302,10 @@ class Level:
         self.last_obstacle_x = 0
 
     def add_obstacle(self):
-        obstacle = Obstacle(self.last_obstacle_x, self.resources)
+        if random.choice([True, False]):
+            obstacle = Rock(self.last_obstacle_x, self.resources)
+        else:
+            obstacle = DeadlyPlant(self.last_obstacle_x, self.resources)
         self.obstacles.append(obstacle)
         self.last_obstacle_x = obstacle.transform.position.x
 
@@ -287,7 +351,7 @@ class Grenouille(IGameObject):
         self.mask = pygame.mask.from_surface(resources.grenouille_img)
         self.display_destroyed = BooleanState(False)
         self.destroyer_effect = None
-        self.is_crouching=False
+        self.is_crouching = False
 
     def in_destroy_mode(self):
         return self.destroyer_effect is not None
@@ -319,11 +383,11 @@ class Grenouille(IGameObject):
     def draw(self, surface):
         image = self.image_destroyed if self.display_destroyed.get_value() else self.image
         rotated = pygame.transform.rotate(image, self.transform.rotation)
-        x,y = self.transform.position.x + self.width // 2, self.transform.position.y + self.height // 2
-        if self.is_crouching: 
+        x, y = self.transform.position.x + self.width // 2, self.transform.position.y + self.height // 2
+        if self.is_crouching:
             y += 20
 
-        rect = rotated.get_rect(center=(x,y))
+        rect = rotated.get_rect(center=(x, y))
         surface.blit(rotated, rect.topleft)
 
     def trigger_vibration(self):
@@ -343,10 +407,8 @@ class CollisionHandler:
         self.effect_manager = effect_manager
         self.last_collided_obstacle = None
 
-    def handle_collision(self, obstacle: Obstacle):
-        offset = (int(obstacle.transform.position.x - self.player.transform.position.x),
-                  int(obstacle.transform.position.y - self.player.transform.position.y))
-        if self.player.mask.overlap(obstacle.mask, offset):
+    def handle_collision(self, obstacle: IObstacle):
+        if obstacle.check_collision(self.player):
             if self.last_collided_obstacle != obstacle:
                 if self.player.in_destroy_mode():
                     obstacle.destroyed = True
@@ -401,6 +463,44 @@ class Renderer:
         self.surface.blit(text, (Settings.WIDTH // 3, Settings.HEIGHT // 2))
         pygame.display.update()
         pygame.time.delay(3000)
+
+class InputHandler:
+    def __init__(self):
+        pass
+
+    def trigger_quit(self, event):
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+            return True
+        return event.type == pygame.QUIT
+
+    def trigger_start(self, event):
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
+            return True
+
+        if event.type == pygame.MOUSEBUTTONUP:
+            return True
+        
+        return False
+
+    def trigger_jump(self, event):
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
+            return True
+
+        if event.type == pygame.MOUSEBUTTONDOWN: # and event.touch
+            x, y = event.pos
+            return y < Settings.HEIGHT - 40
+        
+        return False
+
+    def trigger_crouch(self, event):
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_DOWN:
+            return True
+
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            x, y = event.pos
+            return y > Settings.HEIGHT - 40
+        
+        return False
 
 class InputHandler:
     def __init__(self):
@@ -532,6 +632,7 @@ class Game:
             pygame.display.update()
             await asyncio.sleep(0)
         pygame.quit()
+
 
 def main():
     asyncio.run(Game().run())
