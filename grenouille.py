@@ -466,44 +466,6 @@ class Renderer:
 
 class InputHandler:
     def __init__(self):
-        pass
-
-    def trigger_quit(self, event):
-        if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-            return True
-        return event.type == pygame.QUIT
-
-    def trigger_start(self, event):
-        if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
-            return True
-
-        if event.type == pygame.MOUSEBUTTONUP:
-            return True
-        
-        return False
-
-    def trigger_jump(self, event):
-        if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
-            return True
-
-        if event.type == pygame.MOUSEBUTTONDOWN: # and event.touch
-            x, y = event.pos
-            return y < Settings.HEIGHT - 40
-        
-        return False
-
-    def trigger_crouch(self, event):
-        if event.type == pygame.KEYDOWN and event.key == pygame.K_DOWN:
-            return True
-
-        if event.type == pygame.MOUSEBUTTONDOWN:
-            x, y = event.pos
-            return y > Settings.HEIGHT - 40
-        
-        return False
-
-class InputHandler:
-    def __init__(self):
         self.is_crouching = False
 
     def trigger_quit(self, event):
@@ -561,26 +523,42 @@ class InputHandler:
 # --- GAME CLASS (Coordinates everything) ---
 class Game:
     def __init__(self):
-        pygame.mixer.pre_init(44100, -16, 2, 512)
+        # Initialize only display and clock - defer audio until user interaction
         pygame.init()
-        pygame.mixer.init()
         self.screen = pygame.display.set_mode((Settings.WIDTH, Settings.HEIGHT))
         pygame.display.set_caption("Saute-Grenouille")
         self.clock = pygame.time.Clock()
+        self.input_handler = InputHandler()
+        
+        # These will be initialized after user interaction
+        self.resources = None
+        self.renderer = None
+        self.player = None
+        self.level = None
+        self.effect_manager = None
+        self.collision_handler = None
+        self.score = 0
+
+    def _init_after_interaction(self):
+        """Initialize audio and game resources after user interaction."""
+        pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
         self.resources = Resources()
         self.resources.play_background_music()
         self.renderer = Renderer(self.screen, self.resources)
         self.player = Grenouille(self.resources)
         self.level = Level(self.resources)
-        self.score = 0
         self.effect_manager = EffectManager()
         self.collision_handler = CollisionHandler(self.player, self.effect_manager)
-        self.input_handler = InputHandler()
 
     async def start_screen(self):
+        """Simple splash screen using basic pygame drawing (no Renderer yet)."""
         waiting = True
+        font = pygame.font.Font(None, 48)
+        text = font.render("Press SPACE to play", True, Colors.WHITE)
         while waiting:
-            self.renderer.draw_start_screen()
+            self.screen.fill(Colors.BLUE)
+            self.screen.blit(text, (Settings.WIDTH // 4, Settings.HEIGHT // 2))
+            pygame.display.update()
             for event in pygame.event.get():
                 if self.input_handler.trigger_quit(event):
                     pygame.quit()
@@ -594,6 +572,8 @@ class Game:
 
     async def run(self):
         await self.start_screen()
+        # Initialize audio and resources after user interaction
+        self._init_after_interaction()
         running = True
         while running:
             self.clock.tick(Settings.FPS)
