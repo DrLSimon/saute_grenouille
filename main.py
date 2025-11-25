@@ -10,6 +10,5 @@ import grenouille  # Import the main game
 def main():
     grenouille.main()  # Run the game
     
-
 main()
 
